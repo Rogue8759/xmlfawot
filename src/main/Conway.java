@@ -65,7 +65,7 @@ public class Conway {
 		int inputSize = boardArea;
 		int outputSize = boardArea;
 
-		int samples = 3;
+		int samples = 4;
 		int depth = 25;
 		float alpha = .5f;
 		int[] layerSizes = {inputSize,600,550,560,550,600, outputSize};

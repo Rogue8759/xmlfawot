@@ -32,9 +32,9 @@ public class Enigmas {
 	
 	}
 	
-	public static void enigmas(String[] args) throws IOException {
+	public static void conway(String[] args) throws IOException {
 		tokens = new HashMap<String, Integer>();
-		File corpus = new File("/home/lard/Downloads/Autoencoder/src/main/corpus.txt");
+		File corpus = new File("/home/lantern/eclipse-workspace/xmlfawot/src/main/corpus.txt");
 
 		try (BufferedReader br = new BufferedReader(new FileReader(corpus))) {
 		    int tokenIndex = 0;

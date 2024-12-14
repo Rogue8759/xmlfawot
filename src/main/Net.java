@@ -1,37 +1,45 @@
 package main;
 
+import java.util.Random;
+
+import math.Linear;
+
 public class Net {
+	private static Linear vec;
+	private Random random;
 	private final int inputSize;
 	private final int numLayers;
 	private float[][] neuronStates;
 	private float[][][] synStates;
 	private float[][] biasStates;
 	private int[] layersizes;
+	private int penultLayer;
 	private int numSynapses;
 	private int numBiases;
 	private int lastLayer;
-	private float softmaxDenominator; // The sum of exponentials of the outputs used to calculate a softmax'ed output
-	private final float momentum = 0.90f;
+	private float softmaxDenom; // The denominator used to calculate softmax in output layer
+	private	float momentum;
 	private boolean softmaxEnabled=false;
-	private float dropoutChance = 0.10f;
-	private static final float LOG_OFFSET = 0.000000000000000001f; // Prevent log problems
+	private float dropoutChance;
+	private static final float LOG_OFFSET = (float) Math.exp(-100.0); // Prevent log problems, arbitrary
 	private static int epochs;
 	private static int epoch;
-	
-	// ADAM SHIT
+	private float sumWeightedStates; // The sum of the weighted states of prev. neurons by synapses
+	public float[] outputUnactivated;
+
+	// ADAM initial variables
 	private float[] mirror;
 	private float[] velocity;
 	private float[] mhat;
 	private float[] vhat;
+	public static float b1=0.9f;
+	public static float b2=0.999f;
 
 	//RMSPROP
 	private float[] gradSquared;
-	
-	
 	private int gradientLength;
 	private float alpha;
-	public static float e = 2.71828182845905f;
-	
+	public static float e = (float) Math.E;	
 	
 	public Net copy() {
 		Net copy = new Net(layersizes);
@@ -43,182 +51,88 @@ public class Net {
 		return copy;
 	}
 	
+	public static float activation(float x) { return vec.sigmoid(x); }
+	public static float derivative(float x) { return vec.sigmoidDv(x); }
+	public void setDropoutChance(float dropoutChance) { this.dropoutChance = dropoutChance; }
+	public void setLayerStates(float[][] layerstates) { neuronStates = layerstates; }
+	public void setSynapses(float[][][] synapses) { synStates = synapses; }
+	public void setBiases(float[][] biases) { biasStates = biases; }
+	public float getLearningRate() { return alpha; }
+
+	public float synapseGrad(float ex, float b, float prvState) {
+		/*
+		 * ex: expected value
+		 * b: bias of current neuron
+		 * prvState: state of previous layer's neuron
+		 */
+		return  (activation(sumWeightedStates + b) - ex) 
+				* (derivative(sumWeightedStates + b) * prvState);
+	}
 	
-	public static float activation(float x) {
-		if (x < 0.0f) {
-			return 0;
+	public float biasGrad(float ex, float b) {
+		return (activation(sumWeightedStates + b) - ex) 
+				* derivative(sumWeightedStates + b);
+	}
+	
+	public float neuronGrad(float ex, float b, float corrWeight) {
+		return  (activation(sumWeightedStates + b) - ex) 
+				* (derivative(sumWeightedStates + b) * corrWeight);
+	}
+	
+	public double BCEderivMultilabel(float z, float ex) {
+		if (Math.round(ex) == 1) {
+			return activation(z) * Math.exp(z);
+		} else {
+			return Math.pow(Math.exp(z),2.0f) * activation(z);
 		}
-		return x;
 	}
 	
-	
-	public static float derivative(float x) {
-		if (x < 0.0f) {
-			return 0;
-		}
-		return 1;
+	public double BCEdvMLneuron(float z, float ex, float corrWeight) {
+		return BCEderivMultilabel(z, ex) * corrWeight;
 	}
 	
-	
-	public void setDropoutChance(float dropoutChance) {
-		this.dropoutChance = dropoutChance;
+	public double BCEdvMLSyn(float z, float ex, float prevState) {
+		return BCEderivMultilabel(z, ex) * prevState;
 	}
 	
-	public void setLayerStates(float[][] layerstates) {
-		neuronStates = layerstates;
+	public double BCEdvMLbias(float z, float ex) {
+		return BCEderivMultilabel(z, ex) * 1.0f;
 	}
 	
-	public void setSynapses(float[][][] synapses) {
-		synStates = synapses;
+	public double softmax(float x) {
+		return Math.exp(x) / softmaxDenom;
 	}
 	
-	public void setBiases(float[][] biases) {
-		biasStates = biases;
+	public double softmaxDv(float x) {
+		return softmax(x) - Math.pow(softmax(x), 2.0f);
 	}
 	
-	public float getLearningRate() {
-		return alpha;
-	}
-	
-	public static float synapseGrad(float ex, float wstates, float b, float pstate) {
-		return 2.0f
-				* (activation(wstates + b) - ex) 
-				* (derivative(wstates + b) * pstate);
-		
-	}
-	
-	public static float biasGrad(float ex, float wstates, float b) {
-		return 2.0f
-				* (activation(wstates + b) - ex) 
-				* derivative(wstates + b);
-	}
-	
-	public static float neuronGrad(float ex, float wstates, float b, float corrWeight) {
-		return 2.0f
-				* (activation(wstates + b) - ex) 
-				* (derivative(wstates + b) * corrWeight);
-	}
-	
-	public static double synapseGradEntropy(float ex, float sumExpos, float wstates, float b, float pstate) {
-		/*
-		 * Calculates the gradient of a synapse parameter using cross-entropy. This is
-		 * the pure, unadulterated mathematical derivative, does not account for learning rate.
-		 */
-		
-		return  synapseGrad(ex, wstates, b, pstate) 
-				* entropyDerivative(ex, sumExpos, wstates + b) * pstate;
-	}
-	
-	public static double biasGradEntropy(float ex, float sumExpos, float wstates, float b) {
-		/*
-		 * Calculates the gradient of a bias parameter using cross-entropy. This is
-		 * the pure, unadulterated mathematical derivative, does not account for learning rate.
-		 */
-		
-		return  biasGrad(ex, wstates, b) 
-				* entropyDerivative(ex, sumExpos, wstates + b);
-	}
-	
-	public static double neuronGradEntropy(float ex, float sumExpos, float wstates, float b, float corr_weight) {
-		/*
-		 * Calculates the gradient of a previous neuron state parameter using cross-entropy. This is
-		 * the pure, unadulterated mathematical derivative, does not account for learning rate.
-		 */
-		
-		return  neuronGrad(ex, wstates, b, corr_weight) 
-				* entropyDerivative(ex, sumExpos, wstates + b) * corr_weight;
-	}
-	
-	public void insertInput(float[] inputData) {
-		/*
-		 * Insert data into input layer
-		 * 
-		 */
-		neuronStates[0] = inputData; 
-	}
-	
+	public void insertInput(float[] inputData) { neuronStates[0] = inputData;}
+
 	public void setSoftmax() {
 		softmaxEnabled = true;
 	}
-	
 	public void setSoftmax(boolean enableSoftmax) {
 		softmaxEnabled = enableSoftmax;
 	}
-	
+
 	public boolean getSoftmax() {
 		return softmaxEnabled;
-	}
+	}	
 	
 	public void setEpochs(int eps) {
 		epochs = eps;
 	}
-	
-	public float[] getOutputLayer() {
-		/*
-		 * Return output layer data vector
-		 * 
-		 */
-		return neuronStates[lastLayer];
-	}
-	
-	public static float[] averageGradients(float[][] gradients) {
-		/*
-		 * Crunches the average gradient from an array of gradients
-		 * 
-		 */
-		
-		float[] average = new float[gradients[0].length];
-		float nGradients = gradients.length;
-		float avgVal;
-		
-		for (int i=0;i<average.length;i++) {
-			 avgVal = 0.0f;
-			 for (float[] grad : gradients) {
-				 avgVal += grad[i];
-			 }
-			 avgVal /= nGradients;
-			 average[i] = avgVal;
-		}
-		
-		return average;
-	}
-	
-	public static double entropyDerivative(float ex, float sum, float state) {
-		/*
-		 * The derivative of the composite cross-entropy - softmax function. Pure
-		 * derivative, does not account for learning rate 
-		 */
-		
-		// Maybe this formula needs optimization?
-		return sum * sum * (ex * sum - Math.exp(state)) * (sum - Math.exp(state));
-	}
-	
-	public static double softmaxDerivative(float sum, float state) {
-		/*
-		 * The derivative of the softmax function for an input state.
-		 * Does not calculate the denominator sum in the softmax equation.
-		 */
 
-		return Math.pow(e, state) * (sum - Math.exp(state)) / Math.pow(sum, 2.0f);
+	public float[] getOutputLayer() {
+		return neuronStates[lastLayer];
 	}
 
 	public float[] backprop(float[] output) {
-		/*
-		 * Big ass function that returns the gradient of the network given an observed training output
-		 * 
-		 */
-		
-		float[] gradient = new float[gradientLength];
-		
-		// Set update gradient to zero
-		for (int i = 0; i < gradientLength; i++ ) {
-			gradient[i] = 0;
-		}
+		float[] gradient = vec.zeroVector(gradientLength);
 
 		int backpropStart;
-		int sumWeightedStates;
-		int sumPrevStates;
-		int biasInsPointer = 0;
+		int biasInsPointer = numSynapses;
 		int synapseInsPointer = 0;
 		int layersize = 0;
 		int previousLayersize = 0;
@@ -230,70 +144,39 @@ public class Net {
 		// If softmax is enabled, do cross-entropy
 		if (softmaxEnabled) {
 			layersize = layersizes[lastLayer];
-			previousLayersize = layersizes[numLayers-2];
-			
-			outputBuffer = new float[previousLayersize];
-			for (int i =0; i<previousLayersize;i++) {
-				outputBuffer[i] = 0;
-			}
-			
-			// Calculate total exponentials of output layer states
-			float sumExpos = 0;
-			for (int n=0; n<layersize; n++) {
-				sumExpos += Math.pow(e, neuronStates[lastLayer][n]);
-			}
+			previousLayersize = layersizes[penultLayer];
+			outputBuffer = vec.zeroVector(previousLayersize);
 			
 			for (int n = 0; n<layersize;n++) {
-				
-				sumWeightedStates = 0;
-				sumPrevStates = 0;
-				
-				for (int prn = 0; prn<layersizes[numLayers-2];prn++) {
-					sumWeightedStates += neuronStates[numLayers-2][prn] * synStates[numLayers-2][prn][n];
-					sumPrevStates += neuronStates[numLayers-2][prn];
-				}
-				
-				// Calculate the cross-entropy of this output layer neuron
-				neuronStates[lastLayer][n] = (float) ((1.0f - output[n]) * Math.log(1.0f - neuronStates[lastLayer][n] + LOG_OFFSET));
-
-				
-				for (int prv_n = 0; prv_n<layersizes[numLayers-2];prv_n++)
-				{	
-					gradient[numSynapses + biasInsPointer] += biasGradEntropy(output[n],sumExpos, sumWeightedStates, biasStates[lastLayer][n]);
-					gradient[synapseInsPointer] += synapseGradEntropy(output[n],sumExpos, sumWeightedStates, biasStates[lastLayer][n], neuronStates[numLayers-2][prv_n]);
-					outputBuffer[prv_n] += neuronGradEntropy(output[n],sumExpos, sumWeightedStates, biasStates[lastLayer][n], synStates[numLayers-2][prv_n][n]);
+				for (int prv_n = 0; prv_n<layersizes[penultLayer];prv_n++) {
+					gradient[biasInsPointer] += BCEdvMLbias(outputUnactivated[n], output[n]);
+					gradient[synapseInsPointer] += BCEdvMLSyn(outputUnactivated[n], output[n], neuronStates[penultLayer][prv_n]);
+					outputBuffer[prv_n] += BCEdvMLneuron(outputUnactivated[n], output[n], synStates[penultLayer][prv_n][n]);
 					synapseInsPointer++;
 				}
 				biasInsPointer++;
 			}	
 			output = outputBuffer;	
-			
 		}
 		
+		// Begin hidden backprop
 		for (int l = numLayers+backpropStart;l>0;l--) {
 			layersize = layersizes[l];
 			previousLayersize = layersizes[l-1];
-			
-			outputBuffer = new float[previousLayersize];
-			for (int i =0; i<previousLayersize;i++) {
-				outputBuffer[i] = 0;
-			}
+			outputBuffer = vec.zeroVector(previousLayersize);
 			
 			for (int n = 0; n<layersize;n++) {
 				sumWeightedStates = 0;
-				sumPrevStates = 0;
 				
 				for (int prn = 0; prn<layersizes[l-1];prn++) {
 					sumWeightedStates += neuronStates[l-1][prn] * synStates[l-1][prn][n];
-					sumPrevStates += neuronStates[l-1][prn];
 				}
 
 				
-				for (int prv_n = 0; prv_n<layersizes[l-1];prv_n++)
-				{	
-					gradient[synapseInsPointer] += synapseGrad(output[n], sumWeightedStates, biasStates[l][n], neuronStates[l-1][prv_n]);
-					gradient[numSynapses + biasInsPointer] += biasGrad(output[n], sumWeightedStates, biasStates[l][n]);
-					outputBuffer[prv_n] += neuronGrad(output[n], sumWeightedStates, biasStates[l][n], synStates[l-1][prv_n][n]);
+				for (int prv_n = 0; prv_n<layersizes[l-1];prv_n++) {	
+					gradient[synapseInsPointer] += synapseGrad(output[n], biasStates[l][n], neuronStates[l-1][prv_n]);
+					gradient[biasInsPointer] += biasGrad(output[n], biasStates[l][n]);
+					outputBuffer[prv_n] += neuronGrad(output[n], biasStates[l][n], synStates[l-1][prv_n][n]);
 					
 					synapseInsPointer++;
 				}
@@ -301,11 +184,11 @@ public class Net {
 			}	
 			output = outputBuffer;	
 		}	
-		return gradient;
+		return vec.multiply(gradient, -alpha);
 	}
-	
+
 	public void changeNetParams(float[] gradient) {
-		int biasInsPointer = 0;
+		int biasInsPointer = this.numSynapses;
 		int synapseInsPointer = 0;
 		int layerSize = 0;
 
@@ -314,123 +197,14 @@ public class Net {
 			
 			for (int n = 0; n < layerSize; n++) {				
 				for (int prv_n = 0; prv_n<layersizes[layer - 1]; prv_n++) {	
-					synStates[layer-1][prv_n][n] -= alpha * gradient[synapseInsPointer];
-					biasStates[layer][n] -= alpha * gradient[numSynapses + biasInsPointer];
+					synStates[layer-1][prv_n][n] += gradient[synapseInsPointer];
+					biasStates[layer][n] += gradient[biasInsPointer];
 					
 					synapseInsPointer++;
 				}
 				biasInsPointer++;
 			}	
 		}	
-	}
-	
-	public static float[] subtract(float[] a, float[] b) {
-		/*
-		 * Subtract two vectors
-		 */
-		float[] retrn = new float[a.length];
-		
-		for (int i = 0; i < a.length; i++) {
-			retrn[i] = a[i]-b[i];
-		}
-
-		return retrn;
-
-	}
-	
-	public static float[] add(float[] a, float[] b) {
-		/*
-		 * Add two vectors
-		 */
-		float[] retrn = new float[a.length];
-		
-		for (int i = 0;i<a.length;i++) {
-			retrn[i] = a[i]+b[i];
-		}
-
-		return retrn;
-
-	}
-	
-	public static float[] sqrt(float[] x) {
-		/*
-		 * Takes the square root of a vector element-wise
-		 */
-
-		float[] retrn = new float[x.length];
-		
-		for (int i = 0; i < x.length; i++) {
-			retrn[i] = (float) Math.pow(x[i], 0.5f);
-		}
-		
-		return retrn;
-		
-	}
-	
-	public static float scalar_sqrt(float[] x) {
-		/*
-		 * Square root of the sum of vector elements
-		 */
-		
-		float sum = 0;
-		
-		for (float v : x) {
-			sum += v;
-		}
-		
-		return sum/x.length;
-	}
-	
-	public static float[] square(float[] x) {
-		/*
-		 * Squares a vector's elements element-wise
-		 */
-		
-		float[] retrn = new float[x.length];
-		
-		for (int i = 0; i < x.length; i++) {
-			retrn[i] = (float) Math.pow(x[i], 2.0f);
-		}
-		
-		return retrn;
-		
-	}
-	
-	public static float[] multiply(float[] a, float f) {
-		/*
-		 * Multiply two vectors element-wise
-		 */
-		
-		float[] retrn = new float[a.length];
-		
-		for (int i = 0; i < a.length; i++) {
-			retrn[i] = a[i]*f;
-		}
-
-		return retrn;
-
-	}
-	
-	public static float[] zeroVector(int size) {
-		/*
-		 * Null vector
-		 */
-
-		return new float[size];
-	}
-	
-	public static float[] divide(float n, float[] v) {
-		/*
-		 * Divide a vector's elements by another vector's elements
-		 */
-		
-		float[] retrn = new float[v.length];
-		
-		for (int i = 0; i < v.length; i++) {
-			retrn[i] = n / v[i];
-		}
-
-		return retrn;
 	}
 	
 	public void trainMomentum(float[][] inputData, float[][] outputData) {
@@ -442,7 +216,7 @@ public class Net {
 		float[] acceleration;
 		
 		// Momentum training scheme
-		velocity = new float[gradientLength];
+		velocity = vec.zeroVector(gradientLength);
 
 		for (int e=0;e<epochs;e++)
 			for (int datum=0;datum<samples;datum++) {
@@ -453,10 +227,10 @@ public class Net {
 			}
 		
 			prevGrad = epochGrad;
-			epochGrad = averageGradients(gradients);
-			acceleration = subtract(epochGrad, prevGrad);
-			velocity = multiply(velocity, momentum);
-			velocity = add(velocity, multiply(acceleration,1-momentum));
+			epochGrad = vec.averageVecs(gradients);
+			acceleration = vec.subtract(epochGrad, prevGrad);
+			velocity = vec.multiply(velocity, momentum);
+			velocity = vec.add(velocity, vec.multiply(acceleration,1-momentum));
 			
 			changeNetParams(velocity);
 			epoch++;
@@ -476,7 +250,7 @@ public class Net {
 				gradients[datum] = backprop(outputData[datum]);
 				
 			}
-			epochGrad = averageGradients(gradients);
+			epochGrad = vec.averageVecs(gradients);
 			changeNetParams(epochGrad);
 			epoch++;
 	}
@@ -495,9 +269,9 @@ public class Net {
 				gradients[datum] = backprop(outputData[datum]);
 			}
 
-			epochGrad = averageGradients(gradients);
-			gradSquared = add(multiply(gradSquared, momentum), multiply(square(epochGrad), 1-momentum));
-			changeNetParams(multiply(epochGrad, 1/(scalar_sqrt(gradSquared)+0.0000000000001f)));
+			epochGrad = vec.averageVecs(gradients);
+			gradSquared = vec.add(vec.multiply(gradSquared, momentum), vec.multiply(vec.square(epochGrad), 1-momentum));
+			changeNetParams(vec.multiply(epochGrad, 1/(vec.scalar_sqrt(gradSquared)+0.0000000000001f)));
 	}
 	
 	public void trainAdam(float[][] inputData, float[][] outputData) {
@@ -505,10 +279,6 @@ public class Net {
 
 		float[][] gradients = new float[samples][gradientLength]; // Gradients buffer
 		float[] epochGrad = new float[gradientLength];
-		
-		// ADAM training scheme
-		float b1 = 0.9f;
-		float b2 = 0.999f;
 
 		for (int e=0;e<epochs;e++)
 			for (int datum=0;datum<samples;datum++) {
@@ -517,13 +287,13 @@ public class Net {
 				gradients[datum] = backprop(outputData[datum]);				
 			}
 
-			epochGrad = averageGradients(gradients);
-			mirror = add(multiply(mirror, b1), multiply(epochGrad, 1-b1));
-			velocity = add(multiply(velocity, b2), multiply(square(epochGrad), 1-b2));
-			mhat = multiply(mirror, (float) (1.0f/(1.0f-Math.pow(b1, epoch+1))));
-			vhat = multiply(velocity, (float) (1.0f/(1.0f-Math.pow(b2, epoch+1))));
+			epochGrad = vec.averageVecs(gradients);
+			mirror = vec.add(vec.multiply(mirror, b1), vec.multiply(epochGrad, 1-b1));
+			velocity = vec.add(vec.multiply(velocity, b2), vec.multiply(vec.square(epochGrad), 1-b2));
+			mhat = vec.multiply(mirror, (float) (1.0f/(1.0f-Math.pow(b1, epoch+1))));
+			vhat = vec.multiply(velocity, (float) (1.0f/(1.0f-Math.pow(b2, epoch+1))));
 			
-			changeNetParams(multiply(mhat, 1/(scalar_sqrt(vhat)+0.00000000000001f)));
+			changeNetParams(vec.multiply(mhat, 1/(vec.scalar_sqrt(vhat)+0.00000000000001f)));
 			epoch++;
 	}
 	
@@ -559,7 +329,7 @@ public class Net {
 
 				for (int j=0;j<outputLayerSize;j++) {
 					// Binary cross-entropy loss function
-					lossTotal -= (1.0f - testOutput[i][j]) * Math.log(1.0f - obsOutput[j]+LOG_OFFSET);
+					lossTotal -= (testOutput[i][j]) * Math.log(obsOutput[j] + LOG_OFFSET) + (1.0f - testOutput[i][j]) * Math.log(1.0f - obsOutput[j]+LOG_OFFSET);
 				}
 				
 			}
@@ -595,6 +365,7 @@ public class Net {
 
 			for (int n=0;n<layersize;n++) {
 				neuronStates[i][n] = 0;
+				softmaxDenom = 0.0f;
 				
 				// Calculate weighted sum of states and add bias, run through activation
 				if (Math.random() > 1.0f - dropoutChance) {
@@ -603,53 +374,49 @@ public class Net {
 					for (int prv_n=0;prv_n<prevLayersize;prv_n++) {
 						neuronStates[i][n] += neuronStates[i-1][prv_n] * synStates[i-1][prv_n][n];
 					}
+					if (i==(numLayers-1)) {
+						outputUnactivated[n] = neuronStates[i][n] + biasStates[i][n];
+					}
+
+					softmaxDenom += Math.exp(neuronStates[i][n]);
 					neuronStates[i][n] = activation(neuronStates[i][n] + biasStates[i][n]);
 				}
 				
 			}
 		}
-		
-		// Run the entire output layer through Softmax
-		if (softmaxEnabled) {
-			softmaxDenominator = 0.0f;
-			for (int n=0;n<layersizes[lastLayer];n++) {
-				softmaxDenominator += Math.exp(neuronStates[lastLayer][n]);
-			}
-
-			for (int n=0;n<layersizes[lastLayer];n++) {
-				neuronStates[lastLayer][n] = (float) (Math.exp(neuronStates[lastLayer][n]) / softmaxDenominator);
-				
-			}
-			
-			
-			
-		}
 	}
 	
 	
 	public Net(int[] theLayersizes) {
-		numLayers = theLayersizes.length;
-		lastLayer = numLayers-1; // The index of the last layer
-		inputSize = theLayersizes[0];
+		numLayers = theLayersizes.length;	// The amount of layers
+		lastLayer = numLayers-1; 		// The index of the last layer
+		penultLayer = numLayers-2;
+		inputSize = theLayersizes[0]; 	// Size of input layer
 		layersizes = theLayersizes;
 		gradientLength = 0;
+
+		vec = new Linear();
+		random = new Random();
 		
 		// Declare all of the data layers of the network
 		neuronStates = new float[numLayers][];
 		biasStates = new float[numLayers][];
 		synStates = new float[numLayers][][];
+		outputUnactivated = new float[layersizes[numLayers-1]];
 		
+		// Initialize all the neuron state data layers
 		for (int i = 0; i<numLayers; i++) {
 			neuronStates[i] = new float[layersizes[i]];
 			biasStates[i] = new float[layersizes[i]];
 			numBiases += layersizes[i];
 
-			// Set the network to random
+			// Set the network to random gaussian noise
 			for (int j=0; j<layersizes[i];j++) {
-				neuronStates[i][j] = (float) (Math.random() -0.5f) * 2.0f;
+				neuronStates[i][j] = (float) (random.nextGaussian() * 2.0f);
 			}
 		}
 		
+		// Initialize all the synapse weights to zero
 		for (int i = 0; i<lastLayer; i++) {
 			synStates[i] = new float[layersizes[i]][layersizes[i+1]];
 			numSynapses += layersizes[i] * layersizes[i+1];
@@ -659,11 +426,12 @@ public class Net {
 		gradientLength = numSynapses + numBiases;
 		gradientLength -= inputSize; // We aren't updating the first input layer's biases
 		
+		// Initialize all of the gradient buffers for various optimizers
 		mirror = new float[gradientLength];
 		velocity  = new float[gradientLength];
 		mhat = new float[gradientLength];
 		vhat = new float[gradientLength];
-		gradSquared = zeroVector(gradientLength);
+		gradSquared = vec.zeroVector(gradientLength);
 		
 	}
 	

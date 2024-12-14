@@ -1,4 +1,4 @@
-package main;
+package display;
 
 import java.util.Random;
 
@@ -21,7 +21,7 @@ public class Screen extends Render {
 
 	public void setPixels(float[] pixels) {
 		for (int i =0;i<width*height;i++) {
-			screenRender.pixels[i] = (int) (pixels[i]*2000000000);
+			screenRender.pixels[i] = (int) (1 * pixels[i]*Integer.MAX_VALUE);
 		}
 		
 	}

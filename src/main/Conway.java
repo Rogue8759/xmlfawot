@@ -5,12 +5,29 @@ import java.awt.image.BufferedImage;
 
 import javax.swing.JFrame;
 
+import display.Display;
+
 public class Conway {
-	static int boardWidth = 45;
-	static int boardHeight = 45;
-	static int boardArea = boardWidth * boardHeight;
-	static int zoomScale = 7;
-	static float populationDensity = 0.12f;
+	static final int boardWidth = 20;
+	static final int boardHeight = 20;
+	static final int boardArea = boardWidth * boardHeight;
+	static final int zoomScale = 8;
+	static final float populationDensity = 0.15f;
+	
+	public static float[] argMax(float[] input) {
+		float[] ret = new float[input.length];
+		
+		for (int i=0;i<input.length;i++) {
+			if (input[i] > 0.5f) {
+				ret[i] = 1;
+			} else {
+				ret[i] = 0;
+			}
+		}
+		
+		return ret;
+		
+	}
 	
 	public static float[][] genRandBoard() {
 		float[][] random = new float[boardHeight][boardWidth];
@@ -65,18 +82,19 @@ public class Conway {
 		int inputSize = boardArea;
 		int outputSize = boardArea;
 
-		int samples = 4;
-		int depth = 25;
-		float alpha = .5f;
-		int[] layerSizes = {inputSize,600,550,560,550,600, outputSize};
-		double loss = 0.0f;
-		Tensor2D environment = new Tensor2D(boardWidth, boardHeight);
+		int samples = 20;
+		int depth = 7;
+		float alpha = 1000f;
+		int[] layerSizes = {inputSize,500,400,300,300,200, outputSize};
+		double loss;
+
+		Tensor2D playEnv = new Tensor2D(boardWidth, boardHeight);
 		float[][] randPlayboard = genRandBoard();
-//
+
 		Net network = new Net(layerSizes);
 		network.setLearningRate(alpha);
-		network.setDropoutChance(0.9f);
-		network.setSoftmax(false);
+		network.setDropoutChance(.01f);
+		network.setSoftmax(true);
 		network.setEpochs(1);
 		
 		// Display
@@ -93,18 +111,17 @@ public class Conway {
 		display.start();
 		display.setZoomFactor(zoomScale);
 		
-		// Data shitz
 		Tensor2D board = new Tensor2D(boardWidth, boardHeight);
-		
 		float[][] inputData = new float[1][boardArea];
 		float[][] outputData = new float[1][boardArea];
 
-		Net bestNetYet = null;
-		double worstLossYet = Double.MAX_VALUE;
-
 		for (int e=0;e<samples;e++) {
+			// Inject a random board seed
 			board.inject(genRandBoard());
 			
+			/* Do depth updates to the board
+				inject the updated board into the display, and train the network 
+			*/
 			for (int i=0;i<depth;i++) {
 				inputData[0]=board.compress();
 				board.inject(updateBoard(board.reform()));
@@ -113,36 +130,35 @@ public class Conway {
 					
 				network.train(inputData, outputData, "adam");
 				loss = network.get_loss(inputData, outputData);
-				if (loss < worstLossYet) {
-					bestNetYet = network.copy();
-					worstLossYet = loss;
-				}
-				
 				System.out.println(loss);
 			}
 		}
 		
 		
 		// Shows the final results of our training by running a few games using our model
+		network.setDropoutChance(0.0f);
 		for (int i=0;i<10;i++) {
 			randPlayboard = genRandBoard();
-			environment.inject(randPlayboard);
+			playEnv.inject(randPlayboard);
 			Thread.sleep(200);
-			inputData[0] = environment.compress();
+			inputData[0] = playEnv.compress();
 	
 			for (int r=0;r<30;r++) {
 				
-				bestNetYet.insertInput(inputData[0]);
-				bestNetYet.propagate();
-				outputData[0] = bestNetYet.getOutputLayer();
-				environment.inject(outputData[0]);
+				network.insertInput(inputData[0]);
+				network.propagate();
+				outputData[0] = network.getOutputLayer();
+				playEnv.inject(outputData[0]);
 				
 				display.setScreenPixels(outputData[0]);
+				
+				for (int k =0;k<outputData[0].length;k++) {
+					System.out.print(" " + outputData[0][k]);
+				}
+				//System.out.println(outputData[0]);
 				inputData[0] = outputData[0];
-				
-				
-	
-				Thread.sleep(55);
+
+				Thread.sleep(400);
 			}
 		}
 		

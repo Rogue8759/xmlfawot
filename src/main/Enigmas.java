@@ -13,7 +13,6 @@ public class Enigmas {
 	static HashMap<String, Integer> tokens;
 	
 	public static void testInputWord(String token, Net net) {
-		System.out.println(tokens);
 		int divisions = 0;
 		float[] insertInput = new float[bits_per_token*window_size];
     	for (int i=tokens.get(token);i>0;i=i/2) {
@@ -25,16 +24,16 @@ public class Enigmas {
 		net.insertInput(insertInput);
 		net.propagate();
 		
-		for (float v : net.getLayer(1)) {
-			System.out.println(v + ", ");
+		for (float v : net.getLayer(3)) {
+			System.out.print(v + ", ");
 		}
 			
 	
 	}
 	
-	public static void conway(String[] args) throws IOException {
+	public static void con(String[] args) throws IOException {
 		tokens = new HashMap<String, Integer>();
-		File corpus = new File("/home/lantern/eclipse-workspace/xmlfawot/src/main/corpus.txt");
+		File corpus = new File("/home/eclipse-workspace/xmlfawot/src/main/corpus.txt");
 
 		try (BufferedReader br = new BufferedReader(new FileReader(corpus))) {
 		    int tokenIndex = 0;
@@ -53,13 +52,13 @@ public class Enigmas {
  		// Actually train the autoencoder
  		int num_tokens = tokens.size();
  		bits_per_token = (int) (Math.log(num_tokens) / Math.log(2));
- 		window_size = 3;
- 		int[] layer_sizes = {bits_per_token * window_size, 200,200,18,18,18,40,bits_per_token*window_size};
+ 		window_size = 5;
+ 		int[] layer_sizes = {bits_per_token * window_size, 400,18,200,40,bits_per_token*window_size};
  		int max_input_bits = bits_per_token * window_size;
  		Net vectorizer = new Net(layer_sizes);
  		vectorizer.setLearningRate(1f);
  		vectorizer.setSoftmax();
- 		vectorizer.setDropoutChance(0.5f);
+ 		vectorizer.setDropoutChance(0.0f);
  
  		float[] input_insert = new float[max_input_bits];
  		int divisions;
@@ -72,7 +71,7 @@ public class Enigmas {
  		Net bestNetYet = null;
  		double worstLossYet = Double.MAX_VALUE;
  		float loss;
- 		for (int epoch=0;epoch<9;epoch++) {
+ 		for (int epoch=0;epoch<4;epoch++) {
 	 		try (BufferedReader br = new BufferedReader(new FileReader(corpus))) {
 	 		    // Go through the corpus, give every token/word an index number (used for One-Hot encoding)
 	 		    for (String line; (line = br.readLine()) != null;) {
@@ -112,7 +111,7 @@ public class Enigmas {
  		}
 
  
-		testInputWord("bag", bestNetYet);
+		testInputWord("the", bestNetYet);
 		
 		
 	}

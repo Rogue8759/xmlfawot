@@ -1,4 +1,4 @@
-package main;
+package display;
 
 public class Render {
 	public final int width;
